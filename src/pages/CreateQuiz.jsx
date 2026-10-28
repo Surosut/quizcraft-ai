@@ -9,11 +9,13 @@ import {
   AlertCircle,
   ExternalLink,
   X,
+  Loader2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { useGame } from '../context/GameContext';
 import { generateQuiz } from '../utils/gemini';
+import { extractTextFromPDF } from '../utils/pdfParser';
 import { DIFFICULTY_OPTIONS, QUESTION_COUNT_OPTIONS } from '../utils/constants';
 
 export default function CreateQuiz() {
@@ -26,42 +28,47 @@ export default function CreateQuiz() {
   const [difficulty, setDifficulty] = useState('Medium');
   const [localApiKey, setLocalApiKey] = useState(apiKey);
   const [isLoading, setIsLoading] = useState(false);
+  const [fileLoading, setFileLoading] = useState(false);
   const [fileName, setFileName] = useState('');
   const [dragActive, setDragActive] = useState(false);
 
-  const handleFileRead = (file) => {
+  const handleFileRead = async (file) => {
     if (!file) return;
 
-    if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setNotes(e.target.result);
+    const isPdf = file.type === 'application/pdf' || file.name.endsWith('.pdf');
+    const isTxt = file.type === 'text/plain' || file.name.endsWith('.txt');
+
+    if (!isPdf && !isTxt) {
+      toast.error('Please upload a .txt or .pdf file');
+      return;
+    }
+
+    setFileLoading(true);
+
+    try {
+      if (isTxt) {
+        const text = await file.text();
+        if (text.trim().length < 20) {
+          toast.error('The file appears to be empty or too short.');
+          return;
+        }
+        setNotes(text);
         setFileName(file.name);
         toast.success(`Loaded ${file.name}`);
-      };
-      reader.onerror = () => toast.error('Failed to read file');
-      reader.readAsText(file);
-    } else if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-      toast('PDF support is limited — plain text (.txt) works best.', { icon: '📄' });
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        // Basic PDF text extraction — may not work for all PDFs
-        const text = e.target.result;
-        // Try to extract readable text from PDF binary
-        const extracted = text
-          .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
-          .replace(/\s{3,}/g, '\n')
-          .trim();
-        if (extracted.length > 50) {
-          setNotes(extracted);
-          setFileName(file.name);
-        } else {
-          toast.error('Could not extract text from this PDF. Please paste your notes manually.');
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      toast.error('Please upload a .txt or .pdf file');
+      } else if (isPdf) {
+        toast.loading('Extracting text from PDF...', { id: 'pdf-loading' });
+        const text = await extractTextFromPDF(file);
+        toast.dismiss('pdf-loading');
+        setNotes(text);
+        setFileName(file.name);
+        toast.success(`Extracted text from ${file.name} (${text.length} characters)`);
+      }
+    } catch (error) {
+      toast.dismiss('pdf-loading');
+      console.error('File read error:', error);
+      toast.error(error.message || 'Failed to read file. Please paste your notes manually.');
+    } finally {
+      setFileLoading(false);
     }
   };
 
@@ -212,20 +219,36 @@ export default function CreateQuiz() {
           }}
           onDragLeave={() => setDragActive(false)}
           onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          className={`mt-4 border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
-            dragActive
-              ? 'border-primary-500 bg-primary-500/5'
-              : 'border-gray-300 dark:border-dark-500 hover:border-primary-500/50 hover:bg-primary-500/5'
+          onClick={() => !fileLoading && fileInputRef.current?.click()}
+          className={`mt-4 border-2 border-dashed rounded-xl p-6 text-center transition-all ${
+            fileLoading
+              ? 'border-primary-500 bg-primary-500/5 cursor-wait'
+              : dragActive
+              ? 'border-primary-500 bg-primary-500/5 cursor-pointer'
+              : 'border-gray-300 dark:border-dark-500 hover:border-primary-500/50 hover:bg-primary-500/5 cursor-pointer'
           }`}
         >
-          <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            <span className="text-primary-500 font-medium">Click to upload</span> or drag & drop
-          </p>
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-            .txt or .pdf files (plain text works best)
-          </p>
+          {fileLoading ? (
+            <>
+              <Loader2 className="w-8 h-8 text-primary-500 mx-auto mb-2 animate-spin" />
+              <p className="text-sm text-primary-500 font-medium">
+                Extracting text from PDF...
+              </p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                This may take a few seconds for large files
+              </p>
+            </>
+          ) : (
+            <>
+              <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                <span className="text-primary-500 font-medium">Click to upload</span> or drag & drop
+              </p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                .txt or .pdf files supported
+              </p>
+            </>
+          )}
           <input
             ref={fileInputRef}
             type="file"
